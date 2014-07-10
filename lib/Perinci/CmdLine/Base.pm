@@ -24,39 +24,37 @@ has common_opts => ();
 # role:
 # requires 'run'
 
-sub BUILD {
-    my ($self, $args) = @_;
+sub get_subcommand {
+    my ($self, $name) = @_;
 
-    # set default common_opts
-    if (!$self->{common_opts}) {
-        $self->{common_opts} = {
-            version => {
-                getopt  => 'version|v',
-                summary => 'Show program version',
-                handler => sub { run_version() },
-            },
-            help => {
-                getopt  => 'help|h|?',
-                summary => 'Show help message',
-                handler => sub { $self->{_action} = 'help' },
-            },
-            format => {
-                getopt  => 'format=s',
-                summary => 'Set output format (text/text-simple/text-pretty/json/json-pretty)',
-                handler => sub { $self->{format} = $_[1] },
-            },
-            json => {
-                getopt  => 'json',
-                summary => 'Set output format to json',
-                handler => sub { $self->{format} = 'json' },
-            },
-            subcommands => {
-                getopt  => 'json',
-                summary => 'Set output format to json',
-                handler => sub { $self->{_action} = 'json' },
-            },
-        };
+    my $scs = $self->subcommands;
+    return undef unless $scs;
+
+    if (reftype($scs) eq 'CODE') {
+        return $scs->($self, name=>$name);
+    } else {
+        return $scs->{$name};
     }
+}
+
+sub list_subcommands {
+    my ($self) = @_;
+    state $cached;
+    return $cached if $cached;
+
+    my $scs = $self->subcommands;
+    my $res;
+    if ($scs) {
+        if (reftype($scs) eq 'CODE') {
+            $scs = $scs->($self);
+            $self->_err("Subcommands code didn't return a hashref")
+                unless ref($scs) eq 'HASH';
+        }
+        $res = $scs;
+    } else {
+        $res = {};
+    }
+    $cached = $res;
 }
 
 sub get_meta {
