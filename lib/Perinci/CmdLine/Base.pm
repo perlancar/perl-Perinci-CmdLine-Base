@@ -1,6 +1,13 @@
 package Perinci::CmdLine::Base;
 
-use 5.010;
+# DATE
+# VERSION
+
+use 5.010001;
+
+# this class can actually be a role instead of base class for pericmd &
+# pericmd-lite, but Mo is more lightweight than Role::Tiny (also R::T doesn't
+# have attributes), Role::Basic, or Moo::Role.
 
 use Mo qw'build default';
 
@@ -25,16 +32,25 @@ has selected_subcommand_data => (is => 'rw');
 has selected_subcommand_name => (is => 'rw');
 has subcommands => ();
 has summary => ();
+has tags => ();
 has url => ();
 
-# role: requires '_get_meta' # ($url)
-# role: requires 'format_result' # ($res, $format, $meta)
-# role: requires 'display_result' # ($res, $fres)
-# role: requires 'hook_before_run' # ()
-# role: requires 'hook_after_run' # ()
-# role: requires 'hook_after_get_meta' # ($meta)
+# role: requires 'get_meta' # ($url)
+# to actually implement getting function metadata
 
-sub program_and_subcommand_name {
+# role: requires 'format_result' # ($res, $format, $meta)
+#
+# role: requires 'display_result' # ($res, $fres)
+
+# role: requires 'hook_before_run' # ()
+
+# role: requires 'hook_after_run' # ()
+
+# role: requires 'hook_after_parse_opts' # ($parse_res)
+
+# role: requires 'hook_after_select_subcommand' ($name)
+
+sub get_program_and_subcommand_name {
     my $self = shift;
     my $res = $self->program_name . " " .
         ($self->selected_subcommand_name // "");
@@ -42,20 +58,13 @@ sub program_and_subcommand_name {
     $res;
 }
 
-sub get_meta {
-    my ($self, $url) = @_;
-    my $meta = $self->_get_meta($url);
-    $self->hook_after_get_meta($meta);
-    $meta;
-}
-
-sub get_subcommand {
+sub get_subcommand_data {
     my ($self, $name) = @_;
 
     my $scs = $self->subcommands;
     return undef unless $scs;
 
-    if (reftype($scs) eq 'CODE') {
+    if (ref($scs) eq 'CODE') {
         return $scs->($self, name=>$name);
     } else {
         return $scs->{$name};
@@ -82,13 +91,28 @@ sub list_subcommands {
     $cached = $res;
 }
 
+# if argument is undef, it means we're selecting the primary url (+ summary,
+# ...). selected_subcommand_name will be set to '' (empty string).
 sub select_subcommand {
     my ($self, $name) = @_;
 
-    my $scd = $self->get_subcommand($name);
-    die [500, "No such subcommand: $name"] unless $scd;
-    $self->selected_subcommand_name($name);
+    my $scd;
+    if (defined $name) {
+        $scd = $self->get_subcommand_data($name);
+        die [500, "No such subcommand: $name"] unless $scd;
+    } else {
+        $scd = {
+            url => $self->url,
+            summary => $self->summary,
+            description => $self->description,
+            pass_cmdline_object => $self->pass_cmdline_object,
+            tags => $self->tags,
+        };
+    }
+
+    $self->selected_subcommand_name($name // '');
     $self->selected_subcommand_data($scd);
+    $self->hook_after_select_subcommand($name);
     $scd;
 }
 
@@ -98,6 +122,7 @@ sub status2exitcode {
     $status - 300;
 }
 
+# XXX
 sub do_completion {
     my $self = shift;
 
@@ -109,49 +134,70 @@ sub do_completion {
 
 }
 
-sub parse_opts {
-    require Perinci::Sub::GetArgs::Argv;
+sub _get_subcommand_name_from_argv {
+    require Getopt::Long;
 
-    #$log->tracef("-> parse_opts()");
+    my $self = shift;
+
+    # we want to allow common options to be inserted before subcommand name,
+    # e.g. 'cmd --help subcmd', so we parse it out first
+    my @orig_argv = @ARGV;
+    my $old_conf = Getopt::Long::Configure(qw/bundling no_permute ignore_case
+                                              pass_through/);
+    my @go;
+    my $co = $self->common_opts // {};
+    for (keys %$co) {
+        push @go, $co->{$_}{getopt} => sub{};
+    }
+    Getopt::Long::GetOptions(@go);
+
+    my $scn;
+    if (@ARGV) {
+        $scn = shift @ARGV;
+        # restore options in front of subcommand name that were eaten by
+        # Getopt::Long
+        splice @ARGV, 0, 0, @orig_argv[0..(@orig_argv - @ARGV - 2)];
+    } else {
+        @ARGV = @orig_argv;
+    }
+    use DD; dd \@ARGV;
+
+    Getopt::Long::Configure($old_conf);
+    $scn;
+}
+
+sub parse_opts {
     my ($self) = @_;
 
-    # copy original argv before parsing, this is used e.g. in undo history list
-    $self->{_orig_argv} = [@ARGV];
-
-    my $sc = $self->{_subcommand};
-    return unless $sc && $sc->{url};
-    #$log->tracef("-> parse_subcommand_opts()");
-
-    my $res = $self->_pa->request(meta=>$sc->{url});
-    if ($res->[0] == 200) {
-        # prefill arguments using 'args' from subcommand specification, if any
-        $self->{_args} = {};
-        if ($sc->{args}) {
-            for (keys %{ $sc->{args} }) {
-                $self->{_args}{$_} = $sc->{args}{$_};
-            }
+    # first we get subcommand name
+    {
+        my $scn;
+        if ($self->subcommands && @ARGV) {
+            $scn = $self->_get_subcommand_name_from_argv;
         }
-    } else {
-        #$log->warnf("Can't get metadata from %s: %d - %s", $sc->{url},
-        #            $res->[0], $res->[1]);
-        #$log->tracef("<- parse_subcommand_opts() (bailed)");
-        return;
+        $self->select_subcommand($scn);
     }
-    my $meta = $res->[2];
-    $self->{_meta} = $meta;
-    $self->_add_common_opts_after_meta;
+
+    my %args;
 
     # also set dry-run on environment
     do { $self->{_dry_run} = 1; $ENV{VERBOSE} = 1 } if $ENV{DRY_RUN};
 
+    my $scd = $self->selected_subcommand_data;
+    my $meta = $self->get_meta($scd->{url});
+
     # parse argv
-    my $src_seen;
-    my %ga_args = (
+    my $co = $self->common_opts;
+    require Perinci::Sub::GetArgs::Argv;
+    my $res = Perinci::Sub::GetArgs::Argv::get_args_from_argv(
         argv                => \@ARGV,
+        args                => $scd->{args} ? { %{$scd->{args}} } : undef,
         meta                => $meta,
-        allow_extra_elems   => 1,
+        allow_extra_elems   => 0,
         per_arg_json        => 1,
         per_arg_yaml        => 1,
+        common_opts         => { map {$co->{$_}{getopt} => $co->{$_}{handler}}
+                                     keys %$co },
         on_missing_required_args => sub {
             my %a = @_;
             my ($an, $aa, $as) = ($a{arg}, $a{args}, $a{spec});
@@ -161,110 +207,13 @@ sub parse_opts {
                 return 1;
             } else {
                 # we have no other sources, so we complain about missing arg
-                say "Missing required argument: $an"
-                    if $self->{_check_required_args} // 1;
+                return 0;
             }
-            0;
         },
     );
-    $res = Perinci::Sub::GetArgs::Argv::get_args_from_argv(%ga_args);
-
-    # We load Log::Any::App rather late here, to be able to customize level via
-    # --debug, --dry-run, etc.
-    unless ($ENV{COMP_LINE}) {
-        my $do_log = $self->{_subcommand}{log_any_app};
-        $do_log //= $ENV{LOG};
-        $do_log //= $self->{action_metadata}{$self->{_actions}[0]}{default_log}
-            if @{ $self->{_actions} };
-        $do_log //= $self->log_any_app;
-        $self->_load_log_any_app if $do_log;
-    }
-
-    # we'll try giving argv to server side, but this currently means we skip
-    # processing cmdline_src.
-    if ($res->[0] == 502) {
-        #$log->debugf("Failed parsing arguments (status 502), will try to send ".
-        #                 "argv to server");
-        $self->{_getargs_result} = $res;
-        $self->{_send_argv} = 1;
-        return;
-    }
-
-    $self->_err("Failed parsing arguments: $res->[0] - $res->[1]")
-        unless $res->[0] == 200;
-    for (keys %{ $res->[2] }) {
-        $self->{_args}{$_} = $res->[2]{$_};
-    }
-    #$log->tracef("result of GetArgs for subcommand: remaining argv=%s, args=%s".
-    #                 ", actions=%s", \@ARGV, $self->{_args}, $self->{_actions});
-
-    # handle cmdline_src
-    if (!$ENV{COMP_LINE} && ($self->{_actions}[0] // "") eq 'call') {
-        my $args_p = $meta->{args} // {};
-        my $stdin_seen;
-        for my $an (sort keys %$args_p) {
-            #$log->tracef("TMP: handle cmdline_src for arg=%s", $an);
-            my $as = $args_p->{$an};
-            my $src = $as->{cmdline_src};
-            if ($src) {
-                $self->_err(
-                    "Invalid 'cmdline_src' value for argument '$an': $src")
-                    unless $src =~ /\A(stdin|file|stdin_or_files)\z/;
-                $self->_err(
-                    "Sorry, argument '$an' is set cmdline_src=$src, but type ".
-                        "is not 'str' or 'array', only those are supported now")
-                    unless $as->{schema}[0] =~ /\A(str|array)\z/;
-                if ($src =~ /stdin/) {
-                    $self->_err("Only one argument can be specified ".
-                                    "cmdline_src stdin/stdin_or_files")
-                        if $stdin_seen++;
-                }
-                my $is_ary = $as->{schema}[0] eq 'array';
-                if ($src eq 'stdin' || $src eq 'file' &&
-                        ($self->{_args}{$an}//"") eq '-') {
-                    $self->_err("Argument $an must be set to '-' which means ".
-                                    "from stdin")
-                        if defined($self->{_args}{$an}) &&
-                            $self->{_args}{$an} ne '-';
-                    #$log->trace("Getting argument '$an' value from stdin ...");
-                    $self->{_args}{$an} = $is_ary ? [<STDIN>] :
-                        do { local $/; <STDIN> };
-                } elsif ($src eq 'stdin_or_files') {
-                    # push back argument value to @ARGV so <> can work to slurp
-                    # all the specified files
-                    local @ARGV = @ARGV;
-                    unshift @ARGV, $self->{_args}{$an}
-                        if defined $self->{_args}{$an};
-                    #$log->tracef("Getting argument '$an' value from ".
-                    #                 "stdin_or_files, \@ARGV=%s ...", \@ARGV);
-                    $self->{_args}{$an} = $is_ary ? [<>] : do { local $/; <> };
-                } elsif ($src eq 'file') {
-                    unless (exists $self->{_args}{$an}) {
-                        if ($as->{req}) {
-                            $self->_err(
-                                "Please specify filename for argument '$an'");
-                        } else {
-                            next;
-                        }
-                    }
-                    $self->_err("Please specify filename for argument '$an'")
-                        unless defined $self->{_args}{$an};
-                    #$log->trace("Getting argument '$an' value from ".
-                    #                "file ...");
-                    my $fh;
-                    unless (open $fh, "<", $self->{_args}{$an}) {
-                        $self->_err("Can't open file '$self->{_args}{$an}' ".
-                                        "for argument '$an': $!")
-                    }
-                    $self->{_args}{$an} = $is_ary ? [<$fh>] :
-                        do { local $/; <$fh> };
-                }
-            }
-        }
-    }
-    #$log->tracef("args after cmdline_src is processed: %s", $self->{_args});
-
-    #$log->tracef("<- _parse_subcommand_opts()");
+    die $res if $res->[0] != 200;
+    $self->hook_after_parse_opts($res);
+    $res;
 }
 
 sub run {
@@ -316,4 +265,3 @@ sub run {
 # ABSTRACT: Base class for Perinci::CmdLine{,::Lite}
 
 =for Pod::Coverage ^(.+)$
-
