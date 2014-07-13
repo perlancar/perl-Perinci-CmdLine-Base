@@ -15,6 +15,7 @@ has actions => ();
 has common_opts => ();
 has default_subcommand => ();
 has description => ();
+has dry_run => ();
 has exit => (is=>'rw', default=>1);
 has selected_format => ();
 has formats => ();
@@ -160,7 +161,6 @@ sub _get_subcommand_name_from_argv {
     } else {
         @ARGV = @orig_argv;
     }
-    use DD; dd \@ARGV;
 
     Getopt::Long::Configure($old_conf);
     $scn;
@@ -189,7 +189,7 @@ sub parse_opts {
     # parse argv
     my $co = $self->common_opts;
     require Perinci::Sub::GetArgs::Argv;
-    my $res = Perinci::Sub::GetArgs::Argv::get_args_from_argv(
+    Perinci::Sub::GetArgs::Argv::get_args_from_argv(
         argv                => \@ARGV,
         args                => $scd->{args} ? { %{$scd->{args}} } : undef,
         meta                => $meta,
@@ -211,9 +211,6 @@ sub parse_opts {
             }
         },
     );
-    die $res if $res->[0] != 200;
-    $self->hook_after_parse_opts($res);
-    $res;
 }
 
 sub run {
@@ -225,6 +222,7 @@ sub run {
         $self->selected_format(undef);
         $self->selected_subcommand_data(undef);
         $self->selected_subcommand_name(undef);
+        $self->dry_run(undef);
         $self->hook_before_run;
 
         # completion is special case, we exit early
@@ -232,30 +230,49 @@ sub run {
             die do_completion();
         }
 
-        $self->parse_opts;
+        my $parse_res = $self->parse_opts;
+        die $parse_res unless $parse_res->[0] == 200;
+        $self->hook_after_parse_opts($parse_res);
+        my $missing = $parse_res->[3]{"func.missing_args"};
+        die [400, "Missing required argument(s): ".join(", ", @$missing)]
+            if $missing && @$missing;
+        my $args = $parse_res->[2];
+        my $scd = $self->selected_subcommand_data;
+        $args->{-cmdline} = $self if $scd->{pass_cmdline_object} //
+            $self->pass_cmdline_object;
 
         my $action = $self->selected_action;
+        if (!defined($action)) {
+            $action = 'call';
+        } else {
+        }
         my $meth = "run_$action";
         die [500, "Unknown action $action"] unless $self->can($meth);
 
-        $res = $self->$meth;
+        $res = $self->$meth($args, $meta);
         $fres = $self->format_result($res, $self->selected_format, $meta);
     };
     my $err = $@;
     if ($err) {
         $err = [500, "Died: $err"] unless ref($err) eq 'ARRAY';
         $res = $err;
-        # format error again
-        unless (defined $fres) {
-            $fres = $self->format_result($res, 'text', $meta);
-        }
+    } else {
+        $res = [500, "Bug: no response produced"];
+    }
+    # format error again
+    unless (defined $fres) {
+        $fres = $self->format_result($res, 'text', $meta);
     }
     $self->display_result($res, $fres);
 
   L1:
     $self->hook_after_run;
     if ($self->exit) {
-        exit $self->status2exitcode($res->[0]);
+        if ($res->[3]  && $res->[3]{'cmdline.exit_code'}) {
+            exit $res->[3]{'cmdline.exit_code'};
+        } else {
+            exit $self->status2exitcode($res->[0]);
+        }
     } else {
         return $res;
     }
