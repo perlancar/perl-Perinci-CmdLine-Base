@@ -15,9 +15,7 @@ has actions => ();
 has common_opts => ();
 has default_subcommand => ();
 has description => ();
-has dry_run => ();
 has exit => (is=>'rw', default=>1);
-has selected_format => ();
 has formats => ();
 has pass_cmdline_object => (default=>0);
 has program_name => (
@@ -28,9 +26,6 @@ has program_name => (
         }
         $pn;
     });
-has selected_action => (is => 'rw');
-has selected_subcommand_data => (is => 'rw');
-has selected_subcommand_name => (is => 'rw');
 has subcommands => ();
 has summary => ();
 has tags => ();
