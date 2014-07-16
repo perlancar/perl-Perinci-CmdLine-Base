@@ -95,9 +95,8 @@ sub do_completion {
     # @ARGV given by bash is messed up / different, we get words from parsing,
     # COMP_LINE/COMP_POINT. this might not be the case with other shells like
     # zsh/fish. XXX detect running shell.
-    require Complete::Bash;
-    my ($words, $cword) = Complete::Bash::parse_cmdline();
-
+    #require Complete::Bash;
+    #my ($words, $cword) = Complete::Bash::parse_cmdline();
 }
 
 sub parse_argv {
