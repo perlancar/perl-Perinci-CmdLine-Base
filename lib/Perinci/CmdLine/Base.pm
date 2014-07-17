@@ -191,6 +191,8 @@ sub parse_argv {
         my $meta = $self->get_meta($scd->{url});
         $r->{meta} = $meta;
 
+        $r->{format} //= $meta->{'x.perinci.cmdline.default_format'};
+
         my $co = $self->common_opts;
         require Perinci::Sub::GetArgs::Argv;
         my $res = Perinci::Sub::GetArgs::Argv::get_args_from_argv(
@@ -334,9 +336,141 @@ Result from C<hook_format_result()>.
 
 =head2 actions => array
 
+Contains a list of known actions and their metadata. Keys should be action
+names, values should be metadata. Metadata is a hash containing these keys:
+
+=over
+
+=item * default_log => BOOL (optional)
+
+Whether to enable logging by default (Log::Any::App) when C<LOG> environment
+variable is not set. To speed up program startup, logging is by default turned
+off for simple actions like C<help>, C<list>, C<version>.
+
+=item * use_utf8 => BOOL (optional)
+
+Whether to issue C<< binmode(STDOUT, ":utf8") >>. See L</"UTF8 OUTPUT"> for more
+details.
+
+=back
+
 =head2 common_opts => hash
 
+A hash of common options, which are command-line options that are not associated
+with any subcommand. Each option is itself a specification hash containing these
+keys:
+
+=over
+
+=item * category (str)
+
+Optional, for grouping options in help/usage message, defaults to C<Common
+options>.
+
+=item * getopt (str)
+
+Required, for Getopt::Long specification.
+
+=item * handler (code)
+
+Required, for Getopt::Long specification.
+
+=item * usage (str)
+
+Optional, displayed in usage line in help/usage text.
+
+=item * summary (str)
+
+Optional, displayed in description of the option in help/usage text.
+
+=item * show_in_usage (bool or code, default: 1)
+
+A flag, can be set to 0 if we want to skip showing this option in usage in
+--help, to save some space. The default is to show all, except --subcommand when
+we are executing a subcommand (obviously).
+
+=item * show_in_options (bool or code, default: 1)
+
+A flag, can be set to 0 if we want to skip showing this option in options in
+--help. The default is to 0 for --help and --version in compact help. Or
+--subcommands, if we are executing a subcommand (obviously).
+
+=item * order (int)
+
+Optional, for ordering. Lower number means higher precedence, defaults to 1.
+
+=back
+
+A partial example from the default set by the framework:
+
+ {
+     help => {
+         category        => 'Common options',
+         getopt          => 'help|h|?',
+         usage           => '--help (or -h, -?)',
+         handler         => sub { ... },
+         order           => 0,
+         show_in_options => sub { $ENV{VERBOSE} },
+     },
+     format => {
+         category    => 'Common options',
+         getopt      => 'format=s',
+         summary     => 'Choose output format, e.g. json, text',
+         handler     => sub { ... },
+     },
+     undo => {
+         category => 'Undo options',
+         getopt   => 'undo',
+         ...
+     },
+     ...
+ }
+
+The default contains: help (getopt C<help|h|?>), version (getopt C<version|v>),
+action (getopt C<action>), format (getopt C<format=s>), format_options (getopt
+C<format-options=s>), json*, yaml*, perl*. If there are more than one
+subcommands, this will also be added: list (getopt C<list|l>). If dry-run is
+supported by function, there will also be: dry_run (getopt C<dry-run>). If undo
+is turned on, there will also be: undo (getopt C<undo>), redo (getopt C<redo>),
+history (getopt C<history>), clear_history (getopt C<clear-history>).
+
+*) Currently only added if you say C<use Perinci::CmdLine 1.04>.
+
+Sometimes you do not want some options, e.g. to remove C<format> and
+C<format_options>:
+
+ delete $cmd->common_opts->{format};
+ delete $cmd->common_opts->{format_options};
+ $cmd->run;
+
+Sometimes you want to rename some command-line options, e.g. to change version
+to use capital C<-V> instead of C<-v>:
+
+ $cmd->common_opts->{version}{getopt} = 'version|V';
+
+Sometimes you want to add subcommands as common options instead. For example:
+
+ $cmd->common_opts->{halt} = {
+     category    => 'Server options',
+     getopt      => 'halt',
+     summary     => 'Halt the server',
+     handler     => sub {
+         $cmd->{_subcommand_name} = 'shutdown';
+     },
+ };
+
+This will make:
+
+ % cmd --halt
+
+equivalent to executing the 'shutdown' subcommand:
+
+ % cmd shutdown
+
 =head2 default_subcommand => str
+
+Set subcommand to this if user does not specify which to use (either via first
+command-line argument or C<--cmd> option). See also: C<get_subcommand_from_arg>.
 
 =head2 get_subcommand_from_arg => int (default: 1)
 
@@ -355,17 +489,117 @@ Available output formats.
 
 =head2 pass_cmdline_object => bool (default: 0)
 
+Whether to pass special argument C<-cmdline> containing the cmdline object to
+function. This can be overriden using the C<pass_cmdline_object> on a
+per-subcommand basis.
+
+Passing the cmdline object can be useful, e.g. to call run_help(), etc.
+
 =head2 program_name => str
 
 Default is from PERINCI_CMDLINE_PROGRAM_NAME environment or from $0.
 
 =head2 subcommands => hash | code
 
+=head2 subcommands => {NAME => {ARGUMENT=>...}, ...} | CODEREF
+
+Should be a hash of subcommand specifications or a coderef.
+
+Each subcommand specification is also a hash(ref) and should contain these keys:
+
+=over
+
+=item * C<url> (str, required)
+
+Location of function (accessed via Riap).
+
+=item * C<summary> (str, optional)
+
+Will be retrieved from function metadata at C<url> if unset
+
+=item * C<description> (str, optional)
+
+Shown in verbose help message, if description from function metadata is unset.
+
+=item * C<tags> (array of str, optional)
+
+For grouping or categorizing subcommands, e.g. when displaying list of
+subcommands.
+
+=item * C<log_any_app> (bool, optional)
+
+Whether to load Log::Any::App, default is true. For subcommands that need fast
+startup you can try turning this off for said subcommands. See L</"LOGGING"> for
+more details.
+
+=item * C<use_utf8> (bool, optional)
+
+Whether to issue L<< binmode(STDOUT, ":utf8") >>. See L</"LOGGING"> for more
+details.
+
+=item * C<undo> (bool, optional)
+
+Can be set to 0 to disable transaction for this subcommand; this is only
+relevant when C<undo> attribute is set to true.
+
+=item * C<show_in_help> (bool, optional, default 1)
+
+If you have lots of subcommands, and want to show only some of them in --help
+message, set this to 0 for subcommands that you do not want to show.
+
+=item * C<pass_cmdline_object> (bool, optional, default 0)
+
+To override C<pass_cmdline_object> attribute on a per-subcommand basis.
+
+=item * C<args> (hash, optional)
+
+If specified, will send the arguments (as well as arguments specified via the
+command-line). This can be useful for a function that serves more than one
+subcommand, e.g.:
+
+ subcommands => {
+     sub1 => {
+         summary => 'Subcommand one',
+         url     => '/some/func',
+         args    => {flag=>'one'},
+     },
+     sub2 => {
+         summary => 'Subcommand two',
+         url     => '/some/func',
+         args    => {flag=>'two'},
+     },
+ }
+
+In the example above, both subcommand C<sub1> and C<sub2> point to function at
+C</some/func>. But the function can differentiate between the two via the
+C<flag> argument being sent.
+
+ % cmdprog sub1 --foo 1 --bar 2
+ % cmdprog sub2 --foo 2
+
+In the first invocation, function will receive arguments C<< {foo=>1, bar=>2,
+flag=>'one'} >> and for the second: C<< {foo=>2, flag=>'two'} >>.
+
+=back
+
+Subcommands can also be a coderef, for dynamic list of subcommands. The coderef
+will be called as a method with hash arguments. It can be called in two cases.
+First, if called without argument C<name> (usually when doing --subcommands) it
+must return a hashref of subcommand specifications. If called with argument
+C<name> it must return subcommand specification for subcommand with the
+requested name only.
+
 =head2 summary => str
 
 =head2 tags => array of str
 
 =head2 url => str
+
+Required if you only want to run one function. URL should point to a function
+entity.
+
+Alternatively you can provide multiple functions from which the user can select
+using the first argument (see B<subcommands>).
 
 
 =head1 METHODS
@@ -431,3 +665,34 @@ to STDOUT. But in the case of streaming output, this hook can also set it up.
 Called at the end of C<run()>, right before it exits (if C<exit> attribute is
 true) or returns C<$r->{res}>. The hook has a chance to modify exit code or
 result.
+
+
+=head1 METADATA PROPERTY ATTRIBUTE
+
+This module observes the following Rinci metadata property attributes:
+
+=head2 x.perinci.cmdline.default_format => STR
+
+Set default output format (if user does not specify via --format command-line
+option).
+
+
+=head1 RESULT_METADATA
+
+This module interprets the following result metadata property/attribute:
+
+=head2 attribute: cmdline.exit_code => INT
+
+Instruct Perinci::CmdLine to use this exit code, instead of using (function
+status - 300).
+
+
+=head1 ENVIRONMENT
+
+=over
+
+=item * PERINCI_CMDLINE_PROGRAM_NAME => STR
+
+Can be used to set CLI program name.
+
+=back
