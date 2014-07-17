@@ -36,7 +36,6 @@ has url => ();
 
 # role: requires 'hook_before_run'
 # role: requires 'hook_after_parse_argv'
-# role: requires 'hook_after_select_subcommand'
 # role: requires 'hook_format_result'
 # role: requires 'hook_display_result'
 # role: requires 'hook_after_run'
