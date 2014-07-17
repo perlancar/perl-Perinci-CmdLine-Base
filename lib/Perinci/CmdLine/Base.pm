@@ -13,12 +13,16 @@ use Mo qw'build default';
 
 has actions => ();
 has common_opts => ();
+has custom_completer => ();
+has custom_arg_completer => ();
 has default_subcommand => ();
 has get_subcommand_from_arg => (is=>'rw', default=>1);
 has description => ();
 has exit => (is=>'rw', default=>1);
 has formats => ();
 has pass_cmdline_object => (default=>0);
+has per_arg_json => ();
+has per_arg_yaml => ();
 has program_name => (
     default => sub {
         my $pn = $ENV{PERINCI_CMDLINE_PROGRAM_NAME};
@@ -31,6 +35,7 @@ has subcommands => ();
 has summary => ();
 has tags => ();
 has url => ();
+has _pa => ();
 
 # role: requires 'get_meta' # ($url)
 
@@ -69,7 +74,7 @@ sub list_subcommands {
     my $scs = $self->subcommands;
     my $res;
     if ($scs) {
-        if (reftype($scs) eq 'CODE') {
+        if (ref($scs) eq 'CODE') {
             $scs = $scs->($self);
             $self->_err("Subcommands code didn't return a hashref")
                 unless ref($scs) eq 'HASH';
@@ -87,34 +92,151 @@ sub status2exitcode {
     $status - 300;
 }
 
-# XXX
 sub do_completion {
-    my $self = shift;
+    require Complete::Bash;
 
-    # @ARGV given by bash is messed up / different, we get words from parsing,
-    # COMP_LINE/COMP_POINT. this might not be the case with other shells like
-    # zsh/fish. XXX detect running shell.
-    #require Complete::Bash;
-    #my ($words, $cword) = Complete::Bash::parse_cmdline();
-}
-
-sub parse_argv {
     my ($self, $r) = @_;
 
-    # we parse argv twice. the first parse is with common_opts only so we're
-    # able to catch --help, --version, etc early without having to know about
-    # subcommands. two reasons for this: sometimes we need to get subcommand
-    # name *from* cmdline opts (e.g. --cmd) and thus it's a chicken-and-egg
-    # problem. second, it's faster (especially in P::C case).
-    #
-    # the second parse is after ge get subcommand name and the function
-    # metadata. we can parse the remaining argv to get function arguments.
-    #
-    # note that when doing completion we're not using this algorithem and only
-    # parse argv once. this is to make completion work across common- and
-    # per-subcommand opts, e.g. --he<tab> resulting in --help (common opt) as
-    # well as --height (function argument).
+    my $word_breaks = "=";
 
+    # check whether subcommand is defined. try to search from --cmd, first
+    # command-line argument, or default_subcommand.
+
+    {
+        # @ARGV given by bash is messed up / different, we get words from
+        # parsing, COMP_LINE/COMP_POINT. this might not be the case with other
+        # shells like zsh/fish. XXX detect running shell.
+        my $words = Complete::Bash::break_cmdline_into_words(
+            $ENV{COMP_LINE}, $word_breaks);
+        shift @$words; # shave program name
+        local @ARGV = @$words;
+        $self->_parse_argv1($r, {for_completion=>1});
+    }
+
+    my ($words, $cword) = Complete::Bash::parse_cmdline(
+        undef, undef, $word_breaks);
+
+    my $scn = $r->{subcommand_name} // "";
+    my $scd = $r->{subcommand_data};
+
+    # strip subcommand name from first command-line argument because it
+    # interferes with later parsing
+    if ($scd && $scn eq $words->[0]) {
+        shift @$words;
+        $cword--;
+    }
+
+    my $word = $words->[$cword] // "";
+
+    # determine whether we should complete function arg names/values or just
+    # top-level opts + subcommands name
+
+    my $do_arg = 0;
+    {
+        if (!$self->subcommands) {
+            # do_arg because single command
+            $do_arg++; last;
+        }
+
+        # whether user typed 'blah blah ^' or 'blah blah^'
+        my $space_typed = !defined($word);
+
+        # e.g: spanel delete-account ^
+        if ($self->subcommands && $cword > 0 && $space_typed) {
+            # do_arg because last word typed (+space) is subcommand name
+            $do_arg++; last;
+        }
+
+        # e.g: spanel delete-account --format=yaml --acc^
+        # e.g: spanel --cmd delete-account --acc^
+        if ($cword > 0 && !$space_typed && $scd) {
+            # do_arg because subcommand has been defined
+            $do_arg++; last;
+        }
+
+        # not do_arg
+    }
+
+    # get all command-line options
+
+    my $co = $self->common_opts;
+    my $meta;
+    my @all_opts;
+    my @common_opts;
+    {
+        my %go_spec;
+        my %go_spec_common = map { $co->{$_}{getopt} => sub {} } keys %$co;
+
+        $meta = $self->get_meta($scd->{url} // $self->{url});
+
+        if ($meta) {
+            require Perinci::Sub::GetArgs::Argv;
+            my $res = Perinci::Sub::GetArgs::Argv::gen_getopt_long_spec_from_meta(
+                meta         => $meta,
+                common_opts  => $co,
+                per_arg_json => $self->{per_arg_json},
+                per_arg_yaml => $self->{per_arg_yaml},
+            );
+            %go_spec = %{ $res->[2] };
+        } else {
+            %go_spec = %go_spec_common;
+        }
+        require Getopt::Long::Util;
+        for (keys %go_spec_common) {
+            my $res = Getopt::Long::Util::parse_getopt_long_opt_spec($_);
+            for (@{ $res->{opts} }) {
+                push @common_opts, length > 1 ? "--$_" : "-$_";
+            }
+        }
+        for (keys %go_spec) {
+            my $res = Getopt::Long::Util::parse_getopt_long_opt_spec($_);
+            for (@{ $res->{opts} }) {
+                push @all_opts, length > 1 ? "--$_" : "-$_";
+            }
+        }
+    }
+
+    # do completion
+
+    my $res;
+    if ($do_arg) {
+        # Completing subcommand argument names & values ...
+        require Perinci::Sub::Complete;
+        $res = Perinci::Sub::Complete::complete_cli_arg(
+            meta            => $meta,
+            words           => $words,
+            cword           => $cword,
+            common_opts     => \@common_opts,
+            riap_server_url => $scd->{url},
+            riap_uri        => undef,
+            riap_client     => $self->_pa,
+            custom_completer     => $self->custom_completer,
+            custom_arg_completer => $self->custom_arg_completer,
+        );
+    } else {
+        require Complete::Util;
+        # Completing top-level options + subcommand name ...
+        my @ary;
+        push @ary, @all_opts;
+        my $scs = $self->list_subcommands;
+        push @ary, keys %$scs;
+        $res = {
+            completion => Complete::Util::complete_array_elem(
+                word=>$word, array=>\@ary,
+            ),
+            type=>'option',
+        };
+    }
+
+    [200, "OK", Complete::Bash::format_completion($res)];
+}
+
+sub _parse_argv1 {
+    my ($self, $r, $opts) = @_;
+
+    $opts //= {}; # for_completion: ignore unknown subcommand
+
+    # parse common_opts which potentially sets subcommand
     {
         # one small downside for this is that we cannot do autoabbrev here,
         # because we're not yet specifying all options here.
@@ -148,7 +270,11 @@ sub parse_argv {
         if (!defined($scn) && $self->{subcommands} && @ARGV) {
             # get from first command-line arg
             if ($ARGV[0] =~ /\A-/) {
-                die [400, "Unknown option: $ARGV[0]"];
+                if ($opts->{for_completion}) {
+                    $scn = shift @ARGV;
+                } else {
+                    die [400, "Unknown option: $ARGV[0]"];
+                }
             } else {
                 $scn = shift @ARGV;
             }
@@ -157,7 +283,9 @@ sub parse_argv {
         my $scd;
         if (defined $scn) {
             $scd = $self->get_subcommand_data($scn);
-            die [500, "Unknown subcommand: $scn"] unless $scd;
+            unless ($opts->{for_completion}) {
+                die [500, "Unknown subcommand: $scn"] unless $scd;
+            }
         } elsif (!$r->{action}) {
             # user doesn't specify any subcommand, or specific action. display
             # help instead.
@@ -177,10 +305,30 @@ sub parse_argv {
         $r->{subcommand_data} = $scd;
     }
 
-    my %args;
-
     # also set dry-run on environment
     $r->{dry_run} = 1 if $ENV{DRY_RUN};
+}
+
+sub parse_argv {
+    my ($self, $r) = @_;
+
+    # we parse argv twice. the first parse is with common_opts only so we're
+    # able to catch --help, --version, etc early without having to know about
+    # subcommands. two reasons for this: sometimes we need to get subcommand
+    # name *from* cmdline opts (e.g. --cmd) and thus it's a chicken-and-egg
+    # problem. second, it's faster (especially in P::C case).
+    #
+    # the second parse is after ge get subcommand name and the function
+    # metadata. we can parse the remaining argv to get function arguments.
+    #
+    # note that when doing completion we're not using this algorithem and only
+    # parse argv once. this is to make completion work across common- and
+    # per-subcommand opts, e.g. --he<tab> resulting in --help (common opt) as
+    # well as --height (function argument).
+
+    $self->_parse_argv1($r);
+
+    my %args;
 
     # parse argv for per-subcommand command-line opts
     if ($r->{skip_parse_subcommand_argv}) {
@@ -199,8 +347,8 @@ sub parse_argv {
             args                => $scd->{args} ? { %{$scd->{args}} } : undef,
             meta                => $meta,
             allow_extra_elems   => 0,
-            per_arg_json        => 1,
-            per_arg_yaml        => 1,
+            per_arg_json        => $self->{per_arg_json},
+            per_arg_yaml        => $self->{per_arg_yaml},
             common_opts         => { map {$co->{$_}{getopt} => sub{}}
                                          keys %$co },
             on_missing_required_args => sub {
@@ -223,14 +371,15 @@ sub parse_argv {
 sub run {
     my ($self) = @_;
 
+    my $r = {};
+
     # completion is special case, we delegate to do_completion()
     if ($ENV{COMP_LINE}) {
-        return do_completion();
+        $r->{res} = $self->do_completion($r);
+        goto FORMAT;
     }
 
-    my $r;
     eval {
-        $r = {};
         $self->hook_before_run($r);
 
         my $parse_res = $self->parse_argv($r);
@@ -264,10 +413,9 @@ sub run {
             $r->{res} = [500, "Bug: no response produced"];
         }
     }
+  FORMAT:
     $r->{fres} = $self->hook_format_result($r);
     $self->hook_display_result($r);
-
-  L1:
     $self->hook_after_run($r);
     if ($self->exit) {
         if ($r->{res}[3] && $r->{res}[3]{'cmdline.exit_code'}) {
@@ -465,6 +613,16 @@ This will make:
 equivalent to executing the 'shutdown' subcommand:
 
  % cmd shutdown
+
+=head2 custom_arg_completer => code | hash => {of=>code}
+
+Will be passed to L<Perinci::Sub::Complete>'s C<complete_cli_arg()>. See its
+documentation for more details.
+
+=head2 custom_completer => code
+
+Will be passed to L<Perinci::Sub::Complete>'s C<complete_cli_arg()>. See its
+documentation for more details.
 
 =head2 default_subcommand => str
 
