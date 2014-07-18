@@ -122,7 +122,7 @@ sub do_completion {
 
     # strip subcommand name from first command-line argument because it
     # interferes with later parsing
-    if ($scd && $scn eq $words->[0]) {
+    if ($scd && @$words && $scn eq $words->[0]) {
         shift @$words;
         $cword--;
     }
