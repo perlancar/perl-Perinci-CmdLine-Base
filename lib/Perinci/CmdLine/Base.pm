@@ -202,7 +202,7 @@ sub do_completion {
         require Complete::Util;
         # Completing top-level options + subcommand name ...
         my @ary;
-        push @ary, @${ $genres->[3]{'func.opts'} };
+        push @ary, @{ $genres->[3]{'func.opts'} };
         my $scs = $self->list_subcommands;
         push @ary, keys %$scs;
         $compres = {
