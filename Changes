@@ -1,5 +1,12 @@
 Revision history for Perinci-CmdLine-Base
 
+0.05     2014-07-18 (SHARYANTO)
+
+         [BUG FIXES]
+
+         - Several fixes.
+
+
 0.04     2014-07-18 (SHARYANTO)
 
          - [Bugfix] don't switch to help on single command program.
