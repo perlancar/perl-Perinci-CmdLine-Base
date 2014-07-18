@@ -286,9 +286,9 @@ sub _parse_argv1 {
             unless ($opts->{for_completion}) {
                 die [500, "Unknown subcommand: $scn"] unless $scd;
             }
-        } elsif (!$r->{action}) {
-            # user doesn't specify any subcommand, or specific action. display
-            # help instead.
+        } elsif (!$r->{action} && $self->{subcommands}) {
+            # program has subcommands but user doesn't specify any subcommand,
+            # or specific action. display help instead.
             $r->{action} = 'help';
             $r->{skip_parse_subcommand_argv} = 1;
         } else {
@@ -383,6 +383,7 @@ sub run {
         $self->hook_before_run($r);
 
         my $parse_res = $self->parse_argv($r);
+
         die $parse_res unless $parse_res->[0] == 200;
         $r->{parse_argv_res} = $parse_res;
 
