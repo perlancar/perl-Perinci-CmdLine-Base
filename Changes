@@ -1,5 +1,12 @@
 Revision history for Perinci-CmdLine-Base
 
+0.03     2014-07-18 (SHARYANTO)
+
+         - No functional changes.
+
+         - Adjust to Complete::Bash 0.04.
+
+
 0.02     2014-07-17 (SHARYANTO)
 
          - Implement shell tab completion (some quirks still remain).
