@@ -114,6 +114,10 @@ sub do_completion {
         $self->_parse_argv1($r, {for_completion=>1});
     }
 
+    # force format to text for completion, because user might type 'cmd --format
+    # blah -^'.
+    $r->{format} = 'text';
+
     my ($words, $cword) = @{ Complete::Bash::parse_cmdline(
         undef, undef, $word_breaks) };
 
