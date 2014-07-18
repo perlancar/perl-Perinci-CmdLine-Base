@@ -113,8 +113,8 @@ sub do_completion {
         $self->_parse_argv1($r, {for_completion=>1});
     }
 
-    my ($words, $cword) = Complete::Bash::parse_cmdline(
-        undef, undef, $word_breaks);
+    my ($words, $cword) = @{ Complete::Bash::parse_cmdline(
+        undef, undef, $word_breaks) };
 
     my $scn = $r->{subcommand_name} // "";
     my $scd = $r->{subcommand_data};
