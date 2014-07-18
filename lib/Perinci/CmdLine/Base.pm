@@ -31,6 +31,8 @@ has program_name => (
         }
         $pn;
     });
+has riap_client => ();
+has riap_client_args => ();
 has subcommands => ();
 has summary => ();
 has tags => ();
@@ -656,6 +658,23 @@ Passing the cmdline object can be useful, e.g. to call run_help(), etc.
 =head2 program_name => str
 
 Default is from PERINCI_CMDLINE_PROGRAM_NAME environment or from $0.
+
+=head2 riap_client => obj
+
+Optional. Can be set to L<Perinci::Access> (or compatible) instance. Sometimes a
+Riap request needs to be performed, e.g. when requesting completion to the
+server. If this is empty, the request won't be done.
+
+See Perinci::CmdLine where it is set by default. In Perinci::CmdLine::Lite, this
+is left undefined by default.
+
+=head2 riap_client_args => hash
+
+Arguments to pass to L<Perinci::Access> constructor. This is useful for passing
+e.g. HTTP basic authentication to Riap client
+(L<Perinci::Access::HTTP::Client>):
+
+ riap_client_args => {handler_args => {user=>$USER, password=>$PASS}}
 
 =head2 subcommands => hash | code
 
