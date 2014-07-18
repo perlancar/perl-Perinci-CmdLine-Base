@@ -1,5 +1,15 @@
 Revision history for Perinci-CmdLine-Base
 
+0.04     2014-07-18 (SHARYANTO)
+
+         - [Bugfix] don't switch to help on single command program.
+
+         - Add attributes from Perinci::CmdLine: riap_client (was: _pa) and
+           riap_client_ars (was: pa_args).
+
+         - Completion fixes.
+
+
 0.03     2014-07-18 (SHARYANTO)
 
          - No functional changes.
