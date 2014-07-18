@@ -158,56 +158,36 @@ sub do_completion {
         # not do_arg
     }
 
+    my $compres;
+
     # get all command-line options
 
-    my $co = $self->common_opts;
+    my $co  = $self->common_opts;
+    my $co2 = { map { $co->{$_}{getopt} => sub {} } keys %$co };
     my $meta;
-    my @all_opts;
-    my @common_opts;
+    my $genres;
     {
-        my %go_spec;
-        my %go_spec_common = map { $co->{$_}{getopt} => sub {} } keys %$co;
+        require Perinci::Sub::GetArgs::Argv;
 
+        my $co = $self->common_opts;
         $meta = $self->get_meta($scd->{url} // $self->{url});
-
-        if ($meta) {
-            require Perinci::Sub::GetArgs::Argv;
-            my $res = Perinci::Sub::GetArgs::Argv::gen_getopt_long_spec_from_meta(
-                meta         => $meta,
-                common_opts  => $co,
-                per_arg_json => $self->{per_arg_json},
-                per_arg_yaml => $self->{per_arg_yaml},
-            );
-            %go_spec = %{ $res->[2] };
-        } else {
-            %go_spec = %go_spec_common;
-        }
-        require Getopt::Long::Util;
-        for (keys %go_spec_common) {
-            my $res = Getopt::Long::Util::parse_getopt_long_opt_spec($_);
-            for (@{ $res->{opts} }) {
-                push @common_opts, length > 1 ? "--$_" : "-$_";
-            }
-        }
-        for (keys %go_spec) {
-            my $res = Getopt::Long::Util::parse_getopt_long_opt_spec($_);
-            for (@{ $res->{opts} }) {
-                push @all_opts, length > 1 ? "--$_" : "-$_";
-            }
-        }
+        $genres = Perinci::Sub::GetArgs::Argv::gen_getopt_long_spec_from_meta(
+            meta         => $meta,
+            common_opts  => $co2,
+            per_arg_json => $self->{per_arg_json},
+            per_arg_yaml => $self->{per_arg_yaml},
+        );
+        if ($genres->[0] != 200) { $compres = []; goto L1 }
     }
 
-    # do completion
-
-    my $res;
     if ($do_arg) {
         # Completing subcommand argument names & values ...
         require Perinci::Sub::Complete;
-        $res = Perinci::Sub::Complete::complete_cli_arg(
+        $compres = Perinci::Sub::Complete::complete_cli_arg(
             meta            => $meta,
             words           => $words,
             cword           => $cword,
-            common_opts     => \@common_opts,
+            common_opts     => $co2,
             riap_server_url => $scd->{url},
             riap_uri        => undef,
             riap_client     => $self->riap_client,
@@ -218,10 +198,10 @@ sub do_completion {
         require Complete::Util;
         # Completing top-level options + subcommand name ...
         my @ary;
-        push @ary, @all_opts;
+        push @ary, @${ $genres->[3]{'func.opts'} };
         my $scs = $self->list_subcommands;
         push @ary, keys %$scs;
-        $res = {
+        $compres = {
             completion => Complete::Util::complete_array_elem(
                 word=>$word, array=>\@ary,
             ),
@@ -229,7 +209,8 @@ sub do_completion {
         };
     }
 
-    [200, "OK", Complete::Bash::format_completion($res)];
+  L1:
+    [200, "OK", Complete::Bash::format_completion($compres)];
 }
 
 sub _parse_argv1 {
