@@ -37,7 +37,6 @@ has subcommands => ();
 has summary => ();
 has tags => ();
 has url => ();
-has _pa => ();
 
 # role: requires 'get_meta' # ($url)
 
@@ -211,7 +210,7 @@ sub do_completion {
             common_opts     => \@common_opts,
             riap_server_url => $scd->{url},
             riap_uri        => undef,
-            riap_client     => $self->_pa,
+            riap_client     => $self->riap_client,
             custom_completer     => $self->custom_completer,
             custom_arg_completer => $self->custom_arg_completer,
         );
@@ -373,7 +372,7 @@ sub parse_argv {
 sub run {
     my ($self) = @_;
 
-    my $r = {};
+    my $r = {orig_argv=>[@ARGV]};
 
     # completion is special case, we delegate to do_completion()
     if ($ENV{COMP_LINE}) {
@@ -385,8 +384,14 @@ sub run {
         $self->hook_before_run($r);
 
         my $parse_res = $self->parse_argv($r);
-
-        die $parse_res unless $parse_res->[0] == 200;
+        if ($parse_res->[0] == 502) {
+            # we need to send ARGV to the server, because it's impossible to get
+            # args from ARGV (e.g. there's a cmdline_alias with CODE, which has
+            # been transformed into string when crossing network boundary)
+            $r->{send_argv} = 1;
+        } elsif ($parse_res->[0] != 200) {
+            die $parse_res;
+        }
         $r->{parse_argv_res} = $parse_res;
 
         # set defaults
@@ -398,7 +403,7 @@ sub run {
             if $missing && @$missing;
 
         my $args = $parse_res->[2];
-        $r->{args} = $args;
+        $r->{args} = $args // {};
         my $scd = $r->{subcommand_data};
         $args->{-cmdline} = $self if $scd->{pass_cmdline_object} //
             $self->pass_cmdline_object;
